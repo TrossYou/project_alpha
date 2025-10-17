@@ -13,7 +13,7 @@ spec:
         - name: trossyou-ghcr-secret
       containers:
         - name: backfill
-          image: ghcr.io/trossyou/project_alpha/batch:feat-backfill-0e56fef
+          image: ghcr.io/trossyou/project_alpha/batch:latest
           imagePullPolicy: IfNotPresent
           command: ["node","/app/dist/scripts/job-runner.js"]
           env:
