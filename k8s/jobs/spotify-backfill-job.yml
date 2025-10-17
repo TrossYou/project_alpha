@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spotify-backfill
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: trossyou-ghcr-secret
+      containers:
+        - name: backfill
+          image: ghcr.io/trossyou/project_alpha/batch:feat-backfill-0e56fef
+          imagePullPolicy: IfNotPresent
+          command: ["node","/app/dist/scripts/job-runner.js"]
+          env:
+            - name: JOB_NAME
+              value: "/app/dist/scripts/spotify-backfill.js"
+            - name: DRY_RUN
+              value: "true"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-url-secret
+                  key: DATABASE_URL
+            - name: SPOTIFY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-secret
+                  key: SPOTIFY_CLIENT_ID
+            - name: SPOTIFY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-secret
+                  key: SPOTIFY_CLIENT_SECRET
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
