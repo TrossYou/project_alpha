@@ -9,6 +9,7 @@ env:
   REGISTRY: ghcr.io
   # IMAGE_NAME: formalbridge/project_alpha
   IMAGE_NAME: trossyou/project_alpha/batch
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -24,51 +25,54 @@ jobs:
       url: https://music.formabridge.cc
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
 
-    - name: Setup kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'v1.28.0'
+      - name: Configure kubectl
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' "$KUBECONFIG_DATA" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          export KUBECONFIG=$HOME/.kube/config
 
-    - name: Configure kubectl
-      env:
-        KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
-      run: |
-        mkdir -p ~/.kube
-        echo "$KUBECONFIG_DATA" > ~/.kube/config
-        chmod 600 ~/.kube/config
+      - name: Sanity check
+        run: |
+          kubectl config current-context
+          kubectl cluster-info
+          kubectl get ns
 
+      - name: Deploy to Kubernetes
+        run: |
+          # Apply PostgreSQL deployment
+          kubectl apply -f k8s/postgres-deployment.yaml -n default
 
+          # Run database migration
+          kubectl delete job prisma-migrate-job -n default --ignore-not-found=true
+          kubectl apply -f k8s/migration-job.yaml -n default
 
-    - name: Deploy to Kubernetes
-      run: |
-        
-        # Apply PostgreSQL deployment
-        kubectl apply -f k8s/postgres-deployment.yaml -n default
-        
-        # Run database migration
-        kubectl delete job prisma-migrate-job -n default --ignore-not-found=true
-        kubectl apply -f k8s/migration-job.yaml -n default
-        
-        # Wait for migration to complete
-        kubectl wait --for=condition=complete --timeout=300s job/prisma-migrate-job -n default
-        
-        # Deploy application
-        kubectl apply -f k8s/app-deployment.yaml -n default
-        kubectl apply -f k8s/prisma-studio-deployment.yaml -n default
-        
-        # Apply ingress
-        kubectl apply -f k8s/ingress.yaml -n default
-        
-        # Restart deployment to use new image
-        kubectl rollout restart deployment/project-alpha -n default
-        kubectl rollout status deployment/project-alpha -n default --timeout=300s
+          # Wait for migration to complete
+          kubectl wait --for=condition=complete --timeout=300s job/prisma-migrate-job -n default
 
-    - name: Verify deployment
-      run: |
-        kubectl get pods -n default
-        kubectl get services -n default
-        kubectl get ingress -n default
+          # Deploy application
+          kubectl apply -f k8s/app-deployment.yaml -n default
+          kubectl apply -f k8s/prisma-studio-deployment.yaml -n default
+
+          # Apply ingress
+          kubectl apply -f k8s/ingress.yaml -n default
+
+          # Restart deployment to use new image
+          kubectl rollout restart deployment/project-alpha -n default
+          kubectl rollout status deployment/project-alpha -n default --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n default
+          kubectl get services -n default
+          kubectl get ingress -n default

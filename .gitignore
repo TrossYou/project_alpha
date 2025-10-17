@@ -13,3 +13,4 @@ k8s/*secret.yaml
 .DS_Store
 
 dist/
+kubeconfig.b64
