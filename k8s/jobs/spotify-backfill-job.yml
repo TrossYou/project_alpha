@@ -13,8 +13,8 @@ spec:
         - name: trossyou-ghcr-secret
       containers:
         - name: backfill
-          image: ghcr.io/trossyou/project_alpha/batch:main-b35dd06
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/trossyou/project_alpha/batch:latest
+          imagePullPolicy: Always
           command: ["node","/app/dist/scripts/job-runner.js"]
           env:
             - name: JOB_NAME
