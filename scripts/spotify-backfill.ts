@@ -71,7 +71,7 @@ const backfillSpotifyIds = async () => {
       where: { spotifyId: null },
       select: { id: true, title: true, artist: true },
       orderBy: { id: 'asc' },
-      take: LIMIT, // one-off: fetch up to LIMIT rows at once
+      take: LIMIT,
     });
 
     const total = songs.length;
@@ -103,7 +103,6 @@ const backfillSpotifyIds = async () => {
         console.error(`Error searching for "${song.title}":`, error);
       }
 
-      // small delay between requests to be gentle on the API
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
   } catch (error) {

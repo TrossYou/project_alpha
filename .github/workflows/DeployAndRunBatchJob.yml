@@ -6,10 +6,46 @@ on:
     types: [completed]
   workflow_dispatch:
     inputs:
+      job_name:
+        description: "JS entry file to run (e.g. /app/dist/scripts/spotify-backfill.js)"
+        required: false
+        default: "/app/dist/scripts/spotify-backfill.js"
+      job_resource_name:
+        description: "K8s Job resource name (metadata.name). If empty, auto-derive from job_name"
+        required: false
+        default: ""
+      dry_run:
+        description: "Set DRY_RUN=true or false"
+        required: false
+        default: "true"
+      limit:
+        description: "LIMIT for batch size"
+        required: false
+        default: "200"
       image_tag:
         description: "Image tag to deploy (e.g. sha-<commit>)"
         required: false
         default: ""
+      namespace:
+        description: "Kubernetes namespace"
+        required: false
+        default: "default"
+      image_pull_secret:
+        description: "ImagePullSecret name"
+        required: false
+        default: "trossyou-ghcr-secret"
+      db_secret_name:
+        description: "DB secret name"
+        required: false
+        default: "db-url-secret"
+      db_secret_key:
+        description: "DB secret key"
+        required: false
+        default: "URL"
+      spotify_secret_name:
+        description: "Spotify secret name"
+        required: false
+        default: "spotify-secret"
 
 jobs:
   deploy:
@@ -19,9 +55,16 @@ jobs:
       contents: read
 
     env:
-      NAMESPACE: default
       IMAGE_REPO: ghcr.io/trossyou/project_alpha/batch
       IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag != '' && inputs.image_tag || format('sha-{0}', github.event.workflow_run.head_sha) }}
+      NAMESPACE: ${{ inputs.namespace || 'default' }}
+      JOB_NAME_FILE: ${{ inputs.job_name || '/app/dist/scripts/spotify-backfill.js' }}
+      DRY_RUN: ${{ inputs.dry_run || 'true' }}
+      LIMIT: ${{ inputs.limit || '200' }}
+      IMAGE_PULL_SECRET: ${{ inputs.image_pull_secret || 'trossyou-ghcr-secret' }}
+      DB_SECRET_NAME: ${{ inputs.db_secret_name || 'db-url-secret' }}
+      DB_SECRET_KEY: ${{ inputs.db_secret_key || 'URL' }}
+      SPOTIFY_SECRET_NAME: ${{ inputs.spotify_secret_name || 'spotify-secret' }}
 
     steps:
       - name: Checkout repository
@@ -40,24 +83,50 @@ jobs:
           echo "$KUBECONFIG_DATA" | base64 --decode > ~/.kube/config
           chmod 600 ~/.kube/config
 
-      - name: Render Job manifest with image tag
+      - name: Render Job manifest with inputs
         run: |
           mkdir -p .out
-          export IMAGE_TAG=${{ env.IMAGE_TAG }}
-          envsubst < k8s/jobs/spotify-backfill-job.yml > .out/job.yaml
+          # Compose IMAGE_URI from repo + tag (cannot reference env.* within env block)
+          export IMAGE_URI="${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}"
+
+          # Bring through env from job-level
+          export NAMESPACE="${{ env.NAMESPACE }}"
+          export JOB_NAME_FILE="${{ env.JOB_NAME_FILE }}"
+          export DRY_RUN="${{ env.DRY_RUN }}"
+          export LIMIT="${{ env.LIMIT }}"
+          export IMAGE_PULL_SECRET="${{ env.IMAGE_PULL_SECRET }}"
+          export DB_SECRET_NAME="${{ env.DB_SECRET_NAME }}"
+          export DB_SECRET_KEY="${{ env.DB_SECRET_KEY }}"
+          export SPOTIFY_SECRET_NAME="${{ env.SPOTIFY_SECRET_NAME }}"
+
+          # Derive JOB_RESOURCE_NAME if not explicitly provided via input
+          JOB_RESOURCE_NAME_INPUT='${{ inputs.job_resource_name }}'
+          if [ -n "$JOB_RESOURCE_NAME_INPUT" ]; then
+            JOB_RESOURCE_NAME="$JOB_RESOURCE_NAME_INPUT"
+          else
+            base="$(basename "$JOB_NAME_FILE")"
+            stem="${base%.*}"
+            # normalize: lowercase and replace non-alnum with '-'
+            JOB_RESOURCE_NAME="$(echo "$stem" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')"
+          fi
+          export JOB_RESOURCE_NAME
+          echo "JOB_RESOURCE_NAME=$JOB_RESOURCE_NAME" >> "$GITHUB_ENV"
+
+          # Render template
+          envsubst < k8s/jobs/batch-job-template.yml > .out/job.yaml
           echo "--- Rendered manifest ---"
           cat .out/job.yaml
 
       - name: Apply Job
         run: |
-          kubectl -n ${{ env.NAMESPACE }} delete job spotify-backfill --ignore-not-found=true
-          kubectl -n ${{ env.NAMESPACE }} apply -f .out/job.yaml
-          kubectl -n ${{ env.NAMESPACE }} get jobs,pods -o wide
+          kubectl -n "$NAMESPACE" delete job "$JOB_RESOURCE_NAME" --ignore-not-found=true
+          kubectl -n "$NAMESPACE" apply -f .out/job.yaml
+          kubectl -n "$NAMESPACE" get jobs,pods -o wide
 
       - name: Wait for Job completion
         run: |
-          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=complete --timeout=1800s job/spotify-backfill
+          kubectl -n "$NAMESPACE" wait --for=condition=complete --timeout=1800s job/"$JOB_RESOURCE_NAME"
 
       - name: Stream Job logs
         run: |
-          kubectl -n ${{ env.NAMESPACE }} logs -f job/spotify-backfill --all-containers=true --tail=1000
+          kubectl -n "$NAMESPACE" logs -f job/"$JOB_RESOURCE_NAME" --all-containers=true --tail=1000
