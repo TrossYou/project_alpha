@@ -1,0 +1,63 @@
+name: Deploy & Run Batch Job
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Batch Image"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g. sha-<commit>)"
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      NAMESPACE: default
+      IMAGE_REPO: ghcr.io/trossyou/project_alpha/batch
+      IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag != '' && inputs.image_tag || format('sha-{0}', github.event.workflow_run.head_sha) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_DATA" | base64 --decode > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Render Job manifest with image tag
+        run: |
+          mkdir -p .out
+          export IMAGE_TAG=${{ env.IMAGE_TAG }}
+          envsubst < k8s/jobs/spotify-backfill-job.yml > .out/job.yaml
+          echo "--- Rendered manifest ---"
+          cat .out/job.yaml
+
+      - name: Apply Job
+        run: |
+          kubectl -n ${{ env.NAMESPACE }} delete job spotify-backfill --ignore-not-found=true
+          kubectl -n ${{ env.NAMESPACE }} apply -f .out/job.yaml
+          kubectl -n ${{ env.NAMESPACE }} get jobs,pods -o wide
+
+      - name: Wait for Job completion
+        run: |
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=complete --timeout=1800s job/spotify-backfill
+
+      - name: Stream Job logs
+        run: |
+          kubectl -n ${{ env.NAMESPACE }} logs -f job/spotify-backfill --all-containers=true --tail=1000

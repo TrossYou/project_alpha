@@ -7,8 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # IMAGE_NAME: formalbridge/project_alpha
-  IMAGE_NAME: trossyou/project_alpha/batch
+  IMAGE_NAME: formalbridge/project_alpha
 
 jobs:
   build-and-deploy:

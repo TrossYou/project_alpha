@@ -13,7 +13,7 @@ spec:
         - name: trossyou-ghcr-secret
       containers:
         - name: backfill
-          image: ghcr.io/trossyou/project_alpha/batch:latest
+          image: ghcr.io/trossyou/project_alpha/batch:${IMAGE_TAG}
           imagePullPolicy: Always
           command: ["node","/app/dist/scripts/job-runner.js"]
           env:
@@ -21,6 +21,8 @@ spec:
               value: "/app/dist/scripts/spotify-backfill.js"
             - name: DRY_RUN
               value: "true"
+            - name: LIMIT
+              value: "200"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
