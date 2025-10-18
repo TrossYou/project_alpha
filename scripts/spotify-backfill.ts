@@ -57,70 +57,53 @@ const maskDatabaseUrl = (url?: string) => {
 };
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE ?? '100', 10);
+const LIMIT = parseInt(process.env.LIMIT ?? '200', 10);
 
 const backfillSpotifyIds = async () => {
   try {
-    const { SpotifyAPI } = await import(new URL('../app/external/music/SpotifyAPI.js', import.meta.url).href);
-    const spotifyAPI = new SpotifyAPI();
     console.log('[BACKFILL] DATABASE_URL:', maskDatabaseUrl(process.env.DATABASE_URL));
     const dbInfo = await prisma.$queryRaw<
       { db: string; schema: string }[]
     >`select current_database() as db, current_schema() as schema`;
     console.log('[BACKFILL] DB info:', dbInfo?.[0]);
 
-    const targetCount = await prisma.song.count({ where: { spotifyId: null } });
-    console.log('[BACKFILL] spotifyId IS NULL count:', targetCount);
-
-    const songsWithoutSpotifyId = await prisma.song.findMany({
-      where: {
-        spotifyId: null,
-      },
-      select: {
-        id: true,
-        title: true,
-        artist: true,
-      },
-      take: BATCH_SIZE,
+    const songs = await prisma.song.findMany({
+      where: { spotifyId: null },
+      select: { id: true, title: true, artist: true },
+      orderBy: { id: 'asc' },
+      take: LIMIT, // one-off: fetch up to LIMIT rows at once
     });
 
-    console.log(
-      `[BACKFILL] targets fetched: ${songsWithoutSpotifyId.length} (batchSize=${BATCH_SIZE}) DRY_RUN=${DRY_RUN}`
-    );
-
-    const total = songsWithoutSpotifyId.length;
+    const total = songs.length;
+    console.log(`[BACKFILL] fetched ${total} target songs (limit=${LIMIT}) DRY_RUN=${DRY_RUN}`);
 
     if (total === 0) {
       console.log('[BACKFILL] No targets in this database/schema. Check DATABASE_URL or seed test data.');
       return;
     }
 
-    for (let i = 0; i < total; i++) {
-      const song = songsWithoutSpotifyId[i];
+    for (let i = 0; i < songs.length; i++) {
+      const song = songs[i];
       console.log(`[${i + 1}/${total}] Processing: "${song.title}" by "${song.artist}"`);
 
       try {
-        const results = await spotifyAPI.search({
-          title: song.title,
-          artist: song.artist,
-        });
+        const { SpotifyAPI } = await import(new URL('../app/external/music/SpotifyAPI.js', import.meta.url).href);
+        const spotifyAPI = new SpotifyAPI();
+        const results = await spotifyAPI.search({ title: song.title, artist: song.artist });
 
         if (results.length > 0 && results[0].spotifyId) {
           const spotifyId = results[0].spotifyId;
-
           if (DRY_RUN) {
             console.log(`[DRY] would update songId=${song.id} spotifyId=${spotifyId}`);
           } else {
-            await prisma.song.update({
-              where: { id: song.id },
-              data: { spotifyId },
-            });
+            await prisma.song.update({ where: { id: song.id }, data: { spotifyId } });
           }
         }
       } catch (error) {
         console.error(`Error searching for "${song.title}":`, error);
       }
 
+      // small delay between requests to be gentle on the API
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
   } catch (error) {
